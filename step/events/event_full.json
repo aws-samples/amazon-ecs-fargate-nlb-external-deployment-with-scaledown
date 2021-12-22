@@ -1,0 +1,14 @@
+{
+  "cluster": "sample-infra-Cluster-1234567890ab",
+  "nlb": "arn:aws:elasticloadbalancing:us-east-1:555555555555:loadbalancer/net/sample-LoadB-1234567890abc/1234567890abcdef",
+  "task_sg": "sg-1234567890abcdef0",
+  "subnets": [
+    "subnet-1234567890abcdef0",
+    "subnet-1234567890abcdef1"
+  ],
+  "serviceName": "sample-external-deployment",
+  "taskDefinition": "arn:aws:ecs:us-east-1:555555555555:task-definition/sample-infra-TaskDefinition-1234567890ab:1",
+  "waitForService": 60,
+  "scaledown_decrement": 25,
+  "scaledown_wait": 60
+}

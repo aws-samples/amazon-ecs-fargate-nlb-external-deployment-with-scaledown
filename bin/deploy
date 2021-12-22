@@ -1,0 +1,37 @@
+#!/bin/bash -x
+
+set -o errexit
+echo -n "Enter stackprefix to create > "
+read stackprefix
+echo -n "Enter S3 Bucket to host the code > "
+read bucket
+
+cd step && zip scripts.zip * && cd ..
+mkdir -p deploy
+mv step/scripts.zip deploy/scripts.zip
+aws s3 cp . "s3://${bucket}" --recursive --exclude '*' --include deploy/scripts.zip --include templates/vpc-template.yaml --include step/external_deployment_step.js
+
+# Other stack for samples
+aws cloudformation deploy --stack-name $stackprefix-infra --template-file templates/nlb-external-deployment-support.yaml --parameter-overrides TemplateBucket=$bucket --capabilities CAPABILITY_NAMED_IAM
+
+OUTPUTS=`aws cloudformation describe-stacks --stack-name $stackprefix-infra | jq .Stacks[0].Outputs`
+
+# echo $OUTPUTS | jq '.Stacks[0].Outputs[] | select(.OutputKey == "Cluster") | .OutputValue' -r
+TargetGroupBlue=`echo $OUTPUTS | jq '.[] | select(.OutputKey == "TargetGroupBlue") | .OutputValue' -r`
+TaskSetId=`echo $OUTPUTS | jq '.[] | select(.OutputKey == "TaskSetId") | .OutputValue' -r`
+TaskDefinition=`echo $OUTPUTS | jq '.[] | select(.OutputKey == "TaskDefinition") | .OutputValue' -r`
+LoadBalancerArn=`echo $OUTPUTS | jq '.[] | select(.OutputKey == "LoadBalancerArn") | .OutputValue' -r`
+ServiceName=`echo $OUTPUTS | jq '.[] | select(.OutputKey == "ServiceName") | .OutputValue' -r`
+Cluster=`echo $OUTPUTS | jq '.[] | select(.OutputKey == "Cluster") | .OutputValue' -r`
+TaskSG=`echo $OUTPUTS | jq '.[] | select(.OutputKey == "TaskSG") | .OutputValue' -r`
+TaskSubnets=`echo $OUTPUTS | jq '.[] | select(.OutputKey == "TaskSubnets") | .OutputValue' -r`
+ELBModificationPolicy=`echo $OUTPUTS | jq '.[] | select(.OutputKey == "ELBModificationPolicy") | .OutputValue' -r`
+
+# We had the tag of the circular dependency
+aws elbv2 add-tags --resource-arns ${TargetGroupBlue} --tags Key=taskSetId,Value=${TaskSetId}
+
+aws cloudformation deploy --stack-name $stackprefix --template-file templates/nlb-external-deployment-main.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides TemplateBucket=$bucket ELBModificationPolicy=$ELBModificationPolicy
+
+# Generate template with values from output to event_template.json
+echo 'You can run the step function with the value below:'
+jq -n -f step/events/event_template.json --arg cluster $Cluster --arg nlbArn $LoadBalancerArn --arg taskSg $TaskSG --arg serviceName $ServiceName --arg taskDefinitionArn $TaskDefinition --arg subnets $TaskSubnets

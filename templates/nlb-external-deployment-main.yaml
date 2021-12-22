@@ -1,0 +1,143 @@
+Description: >
+  Create lambda for workaround Blue/Green deployment with ECS/Fargate and controlled scaledown
+
+Parameters:
+  TemplateBucket:
+    Type: String
+    Description: >
+      S3 Bucket used for nested templates
+  ELBModificationPolicy:
+    Type: String
+    Description: Name of the policy to allow modification to the ELB/Listener/TargetGroup
+
+Resources:
+  NLBExternalDeploymentCheckAndLaunchLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub lambda-nlb-external-deployment-check-${AWS::StackName}
+      Handler: external_deployment_check.handler
+      Runtime: nodejs14.x
+      Description: !Sub lambda-nlb-external-deployment-check-${AWS::StackName}
+      Code:
+        S3Bucket: !Ref TemplateBucket
+        S3Key: deploy/scripts.zip
+      MemorySize: 128
+      Timeout: 60
+      Role: !GetAtt NLBExternalDeploymentLambdaRole.Arn
+
+  NLBExternalDeploymentWhenHealthySwapLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub lambda-nlb-external-deployment-swap-${AWS::StackName}
+      Handler: external_deployment_swap.handler
+      Runtime: nodejs14.x
+      Description: !Sub lambda-nlb-external-deployment-swap-${AWS::StackName}
+      Code:
+        S3Bucket: !Ref TemplateBucket
+        S3Key: deploy/scripts.zip
+      MemorySize: 128
+      Timeout: 60
+      Role: !GetAtt NLBExternalDeploymentLambdaRole.Arn
+
+  NLBExternalDeploymentScaleDownLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub lambda-nlb-external-deployment-scaledown-${AWS::StackName}
+      Handler: external_deployment_scaledown.handler
+      Runtime: nodejs14.x
+      Description: !Sub lambda-nlb-external-deployment-scaledown-${AWS::StackName}
+      Code:
+        S3Bucket: !Ref TemplateBucket
+        S3Key: deploy/scripts.zip
+      MemorySize: 128
+      Timeout: 60
+      Role: !GetAtt NLBExternalDeploymentLambdaRole.Arn
+
+  NLBExternalDeploymentLambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            -
+              Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action:
+                - sts:AssumeRole
+        Path: /
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/AmazonECS_FullAccess
+          - !Ref ELBModificationPolicy
+
+  NLBExternalDeploymentLambdaPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub lambda-nlb-external-deployment-swap-policy-${AWS::StackName}
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${NLBExternalDeploymentCheckAndLaunchLambda}:*
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${NLBExternalDeploymentWhenHealthySwapLambda}:*
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${NLBExternalDeploymentScaleDownLambda}:*
+      Roles:
+        -
+          !Ref NLBExternalDeploymentLambdaRole
+
+  # TODO Attach rights for ECS:CreateService, etc AmazonECS_FullAccess
+  NLBExternalDeploymentDeployStep:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      DefinitionS3Location:
+        Bucket: !Ref TemplateBucket
+        Key: step/external_deployment_step.js
+      DefinitionSubstitutions:
+        CheckFunction: !GetAtt 'NLBExternalDeploymentCheckAndLaunchLambda.Arn'
+        SwapFunction: !GetAtt 'NLBExternalDeploymentWhenHealthySwapLambda.Arn'
+        ScaledownFunction: !GetAtt 'NLBExternalDeploymentScaleDownLambda.Arn'
+      RoleArn: !GetAtt 'NLBExternalDeploymentCheckAndLaunchStepRole.Arn'
+      StateMachineName: !Sub NLB-ExternalDeployment-Scaledown-${AWS::StackName}
+
+  NLBExternalDeploymentCheckAndLaunchStepRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+
+  NLBExternalDeploymentCheckAndLaunchStepPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub nlb-external-deployment-policy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !Sub ${NLBExternalDeploymentCheckAndLaunchLambda.Arn}:*
+              - !Sub ${NLBExternalDeploymentWhenHealthySwapLambda.Arn}:*
+              - !Sub ${NLBExternalDeploymentScaleDownLambda.Arn}:*
+      Roles:
+        -
+          !Ref NLBExternalDeploymentCheckAndLaunchStepRole
+Outputs:
+  StepFunctionArn:
+    Value: !Ref NLBExternalDeploymentDeployStep

@@ -1,0 +1,23 @@
+{
+  "name": "amazon-ecs-fargate-nlb-external-deployment-with-scaledown",
+  "version": "1.0.0",
+  "description": "Sample that use Step Functions and Lambda to do a blue/green deployment and control the scaledown. This is meant for customer with long-running connection with NLB to prevent hammering the backend servers.",
+  "main": "external_deployment_check.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/orgs/aws-samples/teams/amazon-ecs-fargate-nlb-external-deployment-controlled-scaledown-samples"
+  },
+  "keywords": [
+    "ECS",
+    "fargate",
+    "external deployment",
+    "AWS",
+    "scale down",
+    "long running connection"
+  ],
+  "author": "Mathieu Bruneau",
+  "license": "MIT-0"
+}

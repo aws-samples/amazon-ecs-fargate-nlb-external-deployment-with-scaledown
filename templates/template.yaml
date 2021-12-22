@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  amazon-ecs-fargate-nlb-external-deployment-with-scaledown
+
+  AWS-Samples amazon-ecs-fargate-nlb-external-deployment-with-scaledown SAM Template
+  
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 10
+
+Resources:
+  CheckFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: ../step/
+      Handler: blue_green_check.handler
+      Runtime: nodejs14.x
+  SwapFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: ../step/
+      Handler: blue_green_swap.handler
+      Runtime: nodejs14.x
+  ScaleDownFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: ../step/
+      Handler: blue_green_scaledown.handler
+      Runtime: nodejs14.x
+
+Outputs:

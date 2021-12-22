@@ -1,0 +1,210 @@
+Description: >
+  Create ECS Service for Blue/Green Deployment on ECS.
+
+Parameters:
+  DesiredCount:
+    Type: Number
+    Default: 2
+  TemplateBucket:
+    Type: String
+    Description: >
+      S3 Bucket used for nested templates
+  InitialServiceName:
+    Type: String
+    Default: "sample-external-deployment"
+
+Resources:
+  VpcStack:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      TemplateURL: !Sub "https://s3.amazonaws.com/${TemplateBucket}/templates/vpc-template.yaml"
+      Parameters:
+        EnvironmentName: nlb-infra
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: network
+      Subnets:
+        - !GetAtt VpcStack.Outputs.PublicSubnet1
+        - !GetAtt VpcStack.Outputs.PublicSubnet2
+
+  LoadBalancerListenerBlue:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: TCP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupBlue
+
+  TargetGroupBlue:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: VpcStack
+    Properties:
+      VpcId: !GetAtt VpcStack.Outputs.VPC
+      Port: 8080
+      Protocol: TCP
+      TargetType: ip
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
+      Tags:
+        - Key: isProduction
+          Value: true
+
+  LoadBalancerListenerGreen:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 8080
+      Protocol: TCP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupGreen
+
+  TargetGroupGreen:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: VpcStack
+    Properties:
+      VpcId: !GetAtt VpcStack.Outputs.VPC
+      Port: 8080
+      Protocol: TCP
+      TargetType: ip
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
+
+  ECSServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      #RoleName: !Sub ecs-service-${AWS::StackName}
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "ecs.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceRole
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: LoadBalancerListenerBlue
+    Properties:
+      ServiceName: !Ref InitialServiceName
+      Cluster: !Ref Cluster
+      DesiredCount: !Ref DesiredCount
+      DeploymentController:
+        Type: EXTERNAL
+
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VpcStack
+    Properties:
+      GroupDescription: Allow tcp to port 8080
+      VpcId: !GetAtt VpcStack.Outputs.VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: Allow inbound on port 8080
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow outbound
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      #Family: !Sub ${AWS::StackName}-simple-app
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu : 256
+      Memory: 0.5GB
+      ContainerDefinitions:
+        - Name: webserver
+          Image: public.ecr.aws/bitnami/nginx:1.21
+          Essential: true
+          Memory: 128
+          PortMappings:
+            - ContainerPort: 8080
+
+  TaskSet:
+    Type: AWS::ECS::TaskSet
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: "FARGATE"
+      LoadBalancers:
+        - TargetGroupArn: !Ref TargetGroupBlue
+          ContainerName: webserver
+          ContainerPort: 8080
+      NetworkConfiguration:
+        AwsVpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref ServiceSecurityGroup
+          Subnets:
+            - !GetAtt VpcStack.Outputs.PrivateSubnet1
+            - !GetAtt VpcStack.Outputs.PrivateSubnet2
+      Scale:
+        Unit: PERCENT
+        Value: 100
+      Service: !Ref Service
+      TaskDefinition: !Ref TaskDefinition
+
+  ELBModificationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub lambda-nlb-external-deployment-swap-policy-${AWS::StackName}
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:AddTags
+              - elasticloadbalancing:RemoveTags
+              - elasticloadbalancing:ModifyListener
+            Resource:
+              - !Ref LoadBalancerListenerBlue
+              - !Ref LoadBalancerListenerGreen
+              - !Ref TargetGroupBlue
+              - !Ref TargetGroupGreen
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:DescribeListeners
+              - elasticloadbalancing:DescribeTargetGroups
+              - elasticloadbalancing:DescribeTags
+            Resource: "*"
+Outputs:
+  LoadBalancerArn:
+    Value: !Ref LoadBalancer
+  Cluster:
+    Value: !Ref Cluster
+  TaskSG :
+    Value: !Ref ServiceSecurityGroup
+  TaskDefinition:
+    Value: !Ref TaskDefinition
+  ServiceName:
+    Value: !GetAtt Service.Name
+  SecurityGroup:
+    Value: !Ref ServiceSecurityGroup
+  TaskSubnets:
+    Value: !GetAtt VpcStack.Outputs.PrivateSubnets
+  TargetGroupBlue:
+    Value: !Ref TargetGroupBlue
+  TaskSetId:
+    Value: !GetAtt TaskSet.Id
+  ELBModificationPolicy:
+    Value: !Ref ELBModificationPolicy

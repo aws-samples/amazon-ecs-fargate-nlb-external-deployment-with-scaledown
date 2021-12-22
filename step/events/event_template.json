@@ -1,0 +1,11 @@
+{
+  "cluster": $cluster,
+  "nlb": $nlbArn,
+  "task_sg": $taskSg,
+  "subnets": $subnets | split(","),
+  "serviceName": $serviceName,
+  "taskDefinition": $taskDefinitionArn,
+  "waitForService": 60,
+  "scaledown_decrement": 25,
+  "scaledown_wait": 60
+}
